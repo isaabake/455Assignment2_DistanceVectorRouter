@@ -12,9 +12,9 @@ namespace DistanceVectorRouter
     {
         RouterConfig Config;
 
-        public Router()
+        public Router(string name)
         {
-            
+            LoadRouterConfig(name);
         }
 
         public void Run()
@@ -22,23 +22,10 @@ namespace DistanceVectorRouter
 
         }
 
-        /// <summary>
-        /// Initializes the router from the router config file
-        /// </summary>
-        /// <param name="configfile"></param>
-        /// <param name="name"></param>
-        public void Initialize(string configfile, string name)
-        {
-            if (!LoadRouterConfig(name))
-            {
-
-            }
-        }
-
         private void MakeRouterConfigs()
         {
             XmlSerializer RouterConfigWriter = new XmlSerializer(typeof(List<RouterConfig>));
-            StreamWriter RouterConfigFile = new StreamWriter(@"routerconfig.xml");
+            StreamWriter RouterConfigFile = new StreamWriter(@"routers.xml");
 
             List<RouterConfig> RouterConfigs = new List<RouterConfig>();
 
@@ -52,20 +39,33 @@ namespace DistanceVectorRouter
             RouterConfigFile.Close();
         }
 
+        private void MakeLinks()
+        {
+            XmlSerializer LinkWriter = new XmlSerializer(typeof(List<Link>));
+            StreamWriter LinkFile = new StreamWriter(@"links.xml");
+
+            List<Link> Links = new List<Link>();
+
+            Links.Add(new Link() { Source = "A", Destination = "B", Cost = 7 });
+            Links.Add(new Link() { Source = "B", Destination = "C", Cost = 1 });
+            Links.Add(new Link() { Source = "C", Destination = "D", Cost = 2 });
+            Links.Add(new Link() { Source = "D", Destination = "E", Cost = 2 });
+            Links.Add(new Link() { Source = "E", Destination = "A", Cost = 1 });
+            Links.Add(new Link() { Source = "E", Destination = "B", Cost = 1 });
+
+            LinkWriter.Serialize(LinkFile, Links);
+            LinkFile.Close();
+        }
+
         private bool LoadRouterConfig(string name)
         {
             XmlSerializer RouterConfigReader = new XmlSerializer(typeof(List<RouterConfig>));
-            StreamReader RouterConfigFile = new StreamReader(@"routerconfig.xml");
-            List<RouterConfig> RouterConfigs;
+            StreamReader RouterConfigFile = new StreamReader(@"routers.xml");
 
-            try
-            {
-                RouterConfigs = (List<RouterConfig>)RouterConfigReader.Deserialize(RouterConfigFile);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return false;
-            }
+            //Do not catch exception, let it go up
+            List<RouterConfig> RouterConfigs = (List<RouterConfig>)RouterConfigReader.Deserialize(RouterConfigFile);
+
+            RouterConfigFile.Close();
             
             this.Config = RouterConfigs.Where(config => config.name == name).FirstOrDefault();
             if (this.Config != null)

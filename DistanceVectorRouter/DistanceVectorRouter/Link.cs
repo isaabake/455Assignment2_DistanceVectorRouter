@@ -6,11 +6,10 @@ using System.Threading.Tasks;
 
 namespace DistanceVectorRouter
 {
-    class Program
+    public class Link
     {
-        static void Main(string[] args)
-        {
-            Router router = new Router(args[0]);
-        }
+        public string Source;
+        public string Destination;
+        public int Cost;
     }
 }
