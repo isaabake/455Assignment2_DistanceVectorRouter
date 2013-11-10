@@ -10,7 +10,8 @@ namespace DistanceVectorRouter
     {
         static void Main(string[] args)
         {
-            Router router = new Router(args[0]);
+            Router router = new Router(args[0], args[1]);
+            router.Run();
         }
     }
 }
