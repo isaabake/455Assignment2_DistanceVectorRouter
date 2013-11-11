@@ -7,10 +7,9 @@ using System.Threading.Tasks;
 
 namespace DistanceVectorRouter
 {
-    class Route
+    class Link
     {
-        public string Destination;
-        public string Next;
-        public int Cost;
+        public string Name;
+        public Socket Socket;
     }
 }

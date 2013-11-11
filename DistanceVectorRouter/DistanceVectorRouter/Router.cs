@@ -12,40 +12,126 @@ namespace DistanceVectorRouter
 {
     class Router
     {
+        public static int INF = 64;
         RouterConfig Config;
         List<RouterConfig> RouterConfigs = new List<RouterConfig>();
         List<Route> RoutingTable = new List<Route>();
+        List<Link> NeighborSockets = new List<Link>();
+
 
         public Router(string configDir, string routerName)
         {
             InitializeConfig(routerName, configDir);
             LoadRoutingTable(configDir);
-            OpenSockets();
+            PrintRoutingTable("P");
         }
 
         public void Run()
         {
-
-        }
-
-        private List<Socket> ReadSockets
-        {
-            get
+            while (true)
             {
-                return RoutingTable.Select(s => s.ReadSocket).ToList();
+                List<Socket> ReadSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
+                List<Socket> WriteSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
+                Socket.Select(ReadSockets, WriteSockets, null, 1000);
+                foreach (Socket sock in ReadSockets)
+                {
+                    byte[] buf = new byte[1024];
+                    sock.Receive(buf);
+
+                    switch (buf.ToString()[0])
+                    {
+                        case 'U':
+                            UpdateRoutingTable(buf.ToString(), NeighborSockets.Where(neighbor => neighbor.Socket == sock).FirstOrDefault());
+                            break;
+
+                        case 'P':
+                            PrintRoutingTable(buf.ToString());
+                            break;
+
+                        case 'L':
+                            UpdateLinkCost(buf.ToString());
+                            break;
+                    }
+
+
+
+
+
+                }
             }
         }
 
-        private List<Socket> WriteSockets
+        private void UpdateLinkCost(string message)
         {
-            get
+
+        }
+
+        private void PrintRoutingTable(string message)
+        {
+            if (message != null)
             {
-                return RoutingTable.Select(s => s.WriteSocket).ToList();
+                string[] args = message.Split(' ');
+                if (args.Count() == 2)
+                {
+                    Route route = RoutingTable.Where(r => r.Destination == args[1]).FirstOrDefault();
+                    if (route != null)
+                    {
+                        Console.WriteLine("Destination={0}, Next={1}, Cost={2}", route.Destination, route.Next, route.Cost);
+                        return;
+                    }
+                }
             }
+            foreach (Route route in RoutingTable)
+            {
+                Console.WriteLine("Destination={0}, Next={1}, Cost={2}", route.Destination, route.Next, route.Cost);
+            }
+            return;
+        }
+
+        /// <summary>
+        /// Updates the routing table based on a message in form "U d cost"
+        /// Where d is the destination node
+        /// </summary>
+        /// <param name="message">The message received on the socket</param>
+        /// <param name="from">The Link where the message was received</param>
+        private void UpdateRoutingTable(string message, Link from)
+        {
+            string[] updateArgs = message.Split(' ');
+
+            //Route where destination == d and next hop == from
+            Route updateRoute = RoutingTable.Where(route => route.Destination == updateArgs[1] && route.Next == from.Name).FirstOrDefault();
+            if (updateRoute != null)
+            {
+                //Try converting cost value to int
+                if (int.TryParse(updateArgs[2], out updateRoute.Cost))
+                {
+                    //Print out the change
+                    Console.WriteLine("Updated route from {0}: Destination={1}, Next={2}, Cost={3}", from.Name, updateRoute.Destination, updateRoute.Next, updateRoute.Cost);
+                    DistributeRoutingTable();
+                }
+                
+            }
+        }
+
+        private void DistributeRoutingTable()
+        {
+
         }
 
         private void LoadRoutingTable(string dir)
         {
+            //Initialize Routing Table for all routers to infinity
+            foreach (RouterConfig conf in RouterConfigs)
+            {
+                RoutingTable.Add(new Route
+                {
+                    Destination = conf.name,
+                    Next = "",
+                    Cost = INF
+                });
+            }
+
+            //Open Routing Table File for the router and update the routing table entries. Also open ports
             using (StreamReader RoutingTableFile = new StreamReader(Path.Combine(new string[2] { dir, this.Config.name + ".cfg" })))
             {
                 while (!RoutingTableFile.EndOfStream)
@@ -56,13 +142,23 @@ namespace DistanceVectorRouter
                         RoutingTable.Add(new Route
                         {
                             Destination = line[0],
-                            Cost = int.Parse(line[1]),
-                            SourcePort = this.Config.port + int.Parse(line[2]),
-                            DestPort = RouterConfigs.First(r => r.name == line[0]).port + int.Parse(line[3])
+                            Next = line[0],
+                            Cost = int.Parse(line[1])
+                        });
+
+                        RouterConfig remoteRouterConf = RouterConfigs.Where(conf => conf.name == line[0]).First();
+                        NeighborSockets.Add(new Link
+                        {
+                            Name = line[0],
+                            Socket = OpenSocket
+                            (
+                                this.Config.hostname,                       //local hostname
+                                int.Parse(line[2]) + this.Config.port,      //local port
+                                remoteRouterConf.hostname,                  //Remote hostname
+                                int.Parse(line[3]) + remoteRouterConf.port  //Remote port
+                            )
                         });
                     }
-
-
                 }
             }
 
@@ -90,56 +186,36 @@ namespace DistanceVectorRouter
             return false;
         }
 
-        private void OpenSockets()
+        /// <summary>
+        /// Opens a UDP socket with specified hostname and port information
+        /// </summary>
+        /// <param name="localhostname">local hostname</param>
+        /// <param name="localport">local port number</param>
+        /// <param name="remotehostname">remote hostname</param>
+        /// <param name="remoteport">remote port</param>
+        /// <returns></returns>
+        private Socket OpenSocket(string localhostname, int localport, string remotehostname, int remoteport)
         {
-            // Creates one SocketPermission object for access restrictions
-            SocketPermission permission = new SocketPermission(
-            NetworkAccess.Accept,     // Allowed to accept connections 
-            TransportType.Udp,        // Defines transport types 
-            "",                       // The IP addresses of local host 
-            SocketPermission.AllPorts // Specifies all ports 
-            );
+            // Get the local IP Address
+            IPAddress localIpAddr = Dns.GetHostAddresses(localhostname)[0];
 
-            // Ensures the code to have permission to access a Socket 
-            permission.Demand();
+            // Create a network endpoint 
+            IPEndPoint localIpEndPoint = new IPEndPoint(localIpAddr, localport);
 
+            // Create the socket and bind locally
+            Socket sock = new Socket(localIpAddr.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
+            sock.Bind(localIpEndPoint);
 
-            foreach (Route route in RoutingTable)
-            {  
-                //////////
-                ///Read///
-                //////////
-                // Resolves a host name to an IPHostEntry instance 
-                IPHostEntry srcIpHost = Dns.GetHostEntry(this.Config.hostname);
+            //Get the remote IP Address
+            IPAddress remoteIpAddr = Dns.GetHostAddresses(remotehostname)[0];
 
-                //Get the first IP Address
-                IPAddress srcIpAddr = srcIpHost.AddressList[0];
+            // Create a network endpoint
+            IPEndPoint remoteIpEndPoint = new IPEndPoint(remoteIpAddr, remoteport);
 
-                // Creates a network endpoint 
-                IPEndPoint srcIpEndPoint = new IPEndPoint(srcIpAddr, route.SourcePort);
+            //Connect to remote
+            sock.Connect(remoteIpEndPoint);
 
-                // Create the socket and bind
-                route.ReadSocket = new Socket(srcIpAddr.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
-                route.ReadSocket.Bind(srcIpEndPoint);
-
-
-
-                ///////////
-                ///Write///
-                ///////////
-                // Resolves a host name to an IPHostEntry instance 
-                IPHostEntry destIpHost = Dns.GetHostEntry(RouterConfigs.Where(config => config.name == route.Destination).First().hostname);
-
-                // Get the first IP address
-                IPAddress destIpAddr = destIpHost.AddressList[0];
-
-                // Creates a network endpoint 
-                IPEndPoint destIpEndPoint = new IPEndPoint(destIpAddr, route.DestPort);
-
-                //Create the socket and bind
-                route.WriteSocket = new Socket(destIpAddr.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
-                route.WriteSocket.Bind(destIpEndPoint);
-            }
+            return sock;
         }
     }
 }
