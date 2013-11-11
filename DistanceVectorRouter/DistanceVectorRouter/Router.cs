@@ -23,7 +23,7 @@ namespace DistanceVectorRouter
         {
             InitializeConfig(routerName, configDir);
             LoadRoutingTable(configDir);
-            PrintRoutingTable("P");
+            NeighborSockets.Add(new Link { Name = this.Config.name, Socket = OpenSocket(this.Config.hostname, this.Config.port, null, 0) });    //Add local port listen
         }
 
         public void Run()
@@ -31,39 +31,64 @@ namespace DistanceVectorRouter
             while (true)
             {
                 List<Socket> ReadSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
-                List<Socket> WriteSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
-                Socket.Select(ReadSockets, WriteSockets, null, 1000);
+                Socket.Select(ReadSockets, null, null, 1000);
                 foreach (Socket sock in ReadSockets)
                 {
                     byte[] buf = new byte[1024];
                     sock.Receive(buf);
+                    string message = System.Text.Encoding.Default.GetString(buf);
 
-                    switch (buf.ToString()[0])
+                    switch (message[0])
                     {
                         case 'U':
-                            UpdateRoutingTable(buf.ToString(), NeighborSockets.Where(neighbor => neighbor.Socket == sock).FirstOrDefault());
+                            UpdateRoutingTable(message, NeighborSockets.Where(neighbor => neighbor.Socket == sock).FirstOrDefault());
                             break;
 
                         case 'P':
-                            PrintRoutingTable(buf.ToString());
+                            PrintRoutingTable(message);
                             break;
 
                         case 'L':
-                            UpdateLinkCost(buf.ToString());
+                            UpdateLinkCost(message);
                             break;
                     }
-
-
-
-
-
                 }
             }
         }
 
         private void UpdateLinkCost(string message)
         {
+            if (message != null)
+            {
+                string[] args = message.Split(' ');
+                if (args.Count() == 3)
+                {
+                    string neighbor = args[1];
+                    int newCost;
+                    if (!int.TryParse(args[2], out newCost))
+                    {
+                        Console.WriteLine("Error in Link update message: {0}", message);
+                        return;
+                    }
 
+                    foreach (Route route in RoutingTable.Where(r => r.Next == neighbor))
+                    {
+                        Route neighborRoute = RoutingTable.Where(r => r.Destination == neighbor).FirstOrDefault();
+                        if (neighborRoute == null)
+                        {
+                            Console.WriteLine("Error in Link update: No neighbor matching {0}", neighbor);
+                            return;
+                        }
+                        Console.WriteLine("Link update");
+                        Console.Write("Old values: ");
+                        PrintRoute(route);
+                        route.Cost = route.Cost - neighborRoute.Cost + newCost;
+                        Console.Write("New values: ");
+                        PrintRoute(route);
+                    }
+                }
+                DistributeRoutingTable();   //Send updated routing table to neighbors
+            }
         }
 
         private void PrintRoutingTable(string message)
@@ -76,16 +101,21 @@ namespace DistanceVectorRouter
                     Route route = RoutingTable.Where(r => r.Destination == args[1]).FirstOrDefault();
                     if (route != null)
                     {
-                        Console.WriteLine("Destination={0}, Next={1}, Cost={2}", route.Destination, route.Next, route.Cost);
+                        PrintRoute(route);
                         return;
                     }
                 }
             }
             foreach (Route route in RoutingTable)
             {
-                Console.WriteLine("Destination={0}, Next={1}, Cost={2}", route.Destination, route.Next, route.Cost);
+                PrintRoute(route);
             }
             return;
+        }
+
+        private void PrintRoute(Route route)
+        {
+            Console.WriteLine("Destination={0}, Next={1}, Cost={2}", route.Destination, route.Next, route.Cost);
         }
 
         /// <summary>
@@ -109,7 +139,7 @@ namespace DistanceVectorRouter
                     Console.WriteLine("Updated route from {0}: Destination={1}, Next={2}, Cost={3}", from.Name, updateRoute.Destination, updateRoute.Next, updateRoute.Cost);
                     DistributeRoutingTable();
                 }
-                
+
             }
         }
 
@@ -139,12 +169,21 @@ namespace DistanceVectorRouter
                     string[] line = RoutingTableFile.ReadLine().Split(' ');
                     if (line.Count() == 4)
                     {
-                        RoutingTable.Add(new Route
+                        Route route = RoutingTable.Where(r => r.Destination == line[0]).FirstOrDefault();
+                        if (route != null)
                         {
-                            Destination = line[0],
-                            Next = line[0],
-                            Cost = int.Parse(line[1])
-                        });
+                            route.Next = line[0];
+                            route.Cost = int.Parse(line[1]);
+                        }
+                        else
+                        {
+                            RoutingTable.Add(new Route
+                            {
+                                Destination = line[0],
+                                Next = line[0],
+                                Cost = int.Parse(line[1])
+                            });
+                        }
 
                         RouterConfig remoteRouterConf = RouterConfigs.Where(conf => conf.name == line[0]).First();
                         NeighborSockets.Add(new Link
@@ -197,7 +236,7 @@ namespace DistanceVectorRouter
         private Socket OpenSocket(string localhostname, int localport, string remotehostname, int remoteport)
         {
             // Get the local IP Address
-            IPAddress localIpAddr = Dns.GetHostAddresses(localhostname)[0];
+            IPAddress localIpAddr = Dns.GetHostAddresses(localhostname).Where(ip => ip.AddressFamily == AddressFamily.InterNetwork).FirstOrDefault();
 
             // Create a network endpoint 
             IPEndPoint localIpEndPoint = new IPEndPoint(localIpAddr, localport);
@@ -206,14 +245,17 @@ namespace DistanceVectorRouter
             Socket sock = new Socket(localIpAddr.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
             sock.Bind(localIpEndPoint);
 
-            //Get the remote IP Address
-            IPAddress remoteIpAddr = Dns.GetHostAddresses(remotehostname)[0];
+            if (remotehostname != null && remoteport != 0)
+            {
+                //Get the remote IP Address
+                IPAddress remoteIpAddr = Dns.GetHostAddresses(remotehostname).Where(ip => ip.AddressFamily == AddressFamily.InterNetwork).FirstOrDefault();
 
-            // Create a network endpoint
-            IPEndPoint remoteIpEndPoint = new IPEndPoint(remoteIpAddr, remoteport);
+                // Create a network endpoint
+                IPEndPoint remoteIpEndPoint = new IPEndPoint(remoteIpAddr, remoteport);
 
-            //Connect to remote
-            sock.Connect(remoteIpEndPoint);
+                //Connect to remote
+                sock.Connect(remoteIpEndPoint);
+            }
 
             return sock;
         }
