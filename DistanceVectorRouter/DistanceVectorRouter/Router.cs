@@ -6,7 +6,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Xml.Serialization;
+using System.Diagnostics;
 
 namespace DistanceVectorRouter
 {
@@ -24,14 +26,17 @@ namespace DistanceVectorRouter
             InitializeConfig(routerName, configDir);
             LoadRoutingTable(configDir);
             NeighborSockets.Add(new Link { Name = this.Config.name, Socket = OpenSocket(this.Config.hostname, this.Config.port, null, 0) });    //Add local port listen
+            Console.WriteLine("Router {0}", routerName);
         }
 
         public void Run()
         {
+            Stopwatch watch = new Stopwatch();
+            watch.Start();
             while (true)
             {
                 List<Socket> ReadSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
-                Socket.Select(ReadSockets, null, null, 1000);
+                Socket.Select(ReadSockets, null, null, 100000);  //Timeout = 100ms
                 foreach (Socket sock in ReadSockets)
                 {
                     byte[] buf = new byte[1024];
@@ -52,6 +57,16 @@ namespace DistanceVectorRouter
                             UpdateLinkCost(message);
                             break;
                     }
+                }
+                if (watch.Elapsed.Seconds > 10)
+                {
+                    watch.Reset();
+                    foreach (Route route in RoutingTable.Where(r => r.Cost < INF && NeighborSockets.Exists(l => l.Name == r.Destination)))
+                    {
+                        DistributeUpdatedRoute(route);
+                    }
+                    watch.Start();
+
                 }
             }
         }
@@ -85,9 +100,10 @@ namespace DistanceVectorRouter
                         route.Cost = route.Cost - neighborRoute.Cost + newCost;
                         Console.Write("New values: ");
                         PrintRoute(route);
+                        DistributeUpdatedRoute(route);   //Send updated routing table to neighbors
                     }
                 }
-                DistributeRoutingTable();   //Send updated routing table to neighbors
+                
             }
         }
 
@@ -129,29 +145,66 @@ namespace DistanceVectorRouter
             string[] updateArgs = message.Split(' ');
 
             //Route where destination == d and next hop == from
-            Route updateRoute = RoutingTable.Where(route => route.Destination == updateArgs[1] && route.Next == from.Name).FirstOrDefault();
+            Route updateRoute = RoutingTable.Where(route => route.Destination == updateArgs[1]).FirstOrDefault();
             if (updateRoute != null)
             {
-                //Try converting cost value to int
-                if (int.TryParse(updateArgs[2], out updateRoute.Cost))
-                {
-                    //Print out the change
-                    Console.WriteLine("Updated route from {0}: Destination={1}, Next={2}, Cost={3}", from.Name, updateRoute.Destination, updateRoute.Next, updateRoute.Cost);
-                    DistributeRoutingTable();
-                }
+                int costArg;
 
+                //Try converting cost value to int
+                if (int.TryParse(updateArgs[2], out costArg))
+                {
+                    Route neighbor = RoutingTable.Where(r => r.Next == from.Name && r.Destination == from.Name).FirstOrDefault(); //Get the route to get to the next hop
+                    if (neighbor == null)
+                    {
+                        Console.WriteLine("Error in UpdateRoutingTable: No neighbor for next hop to: {0}", from.Name);
+                        return;
+                    }
+                    int newCost = costArg + neighbor.Cost;    //newCost is cost to get to the next hop + the update
+
+                    if (updateRoute.Next != from.Name && newCost < updateRoute.Cost)    //If it's not from the current next but has lower cost, update route to use that node instead 
+                    {
+                        updateRoute.Cost = newCost;
+                        updateRoute.Next = from.Name;
+
+                        //Print out the change
+                        Console.Write("Updated route from {0}: ", from.Name);
+                        PrintRoute(updateRoute);
+                        DistributeUpdatedRoute(updateRoute);
+                    }
+                    else if (updateRoute.Next == from.Name && updateRoute.Cost != newCost)     //Else it's not from a different router, update the table if the cost is different
+                    {
+                        updateRoute.Cost = newCost;
+
+                        //Print out the change
+                        Console.WriteLine("Updated route from {0}: Destination={1}, Next={2}, Cost={3}", from.Name, updateRoute.Destination, updateRoute.Next, updateRoute.Cost);
+                        DistributeUpdatedRoute(updateRoute);
+                    }
+                }
             }
         }
 
-        private void DistributeRoutingTable()
+        private void DistributeUpdatedRoute(Route route)
         {
-
+            if (route.Destination != this.Config.name)  //Not route to get to yourself...
+            {
+                //Don't send to yourself and dont send updates for a router to that router (sending update b to b)
+                foreach (Link link in NeighborSockets.Where(l => l.Name != this.Config.name &&
+                                                                 l.Name != route.Destination &&
+                                                                 l.Name != route.Next))  
+                {
+                    Console.WriteLine("Sending update for destination {0} to {1}", route.Destination, link.Name);
+                    byte[] message = System.Text.Encoding.Default.GetBytes(string.Format("U {0} {1}", route.Destination, route.Cost));
+                    Console.WriteLine("!debug! sending \"{0}\" to {1}", Encoding.Default.GetString(message), link.Name);
+                    int sent = link.Socket.Send(message);
+                    Console.WriteLine("Send returned: {0}", sent);
+                }
+            }
         }
 
         private void LoadRoutingTable(string dir)
         {
             //Initialize Routing Table for all routers to infinity
-            foreach (RouterConfig conf in RouterConfigs)
+            foreach (RouterConfig conf in RouterConfigs.Where(r => r.name != this.Config.name))
             {
                 RoutingTable.Add(new Route
                 {
