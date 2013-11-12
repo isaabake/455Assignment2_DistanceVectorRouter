@@ -36,7 +36,7 @@ namespace DistanceVectorRouter
             while (true)
             {
                 List<Socket> ReadSockets = NeighborSockets.Select(neighbor => neighbor.Socket).ToList();
-                Socket.Select(ReadSockets, null, null, 100000);  //Timeout = 100ms
+                Socket.Select(ReadSockets, null, null, 10000);  //Timeout = 10ms
                 foreach (Socket sock in ReadSockets)
                 {
                     byte[] buf = new byte[1024];
@@ -61,7 +61,8 @@ namespace DistanceVectorRouter
                 if (watch.Elapsed.Seconds > 10)
                 {
                     watch.Reset();
-                    foreach (Route route in RoutingTable.Where(r => r.Cost < INF && NeighborSockets.Exists(l => l.Name == r.Destination)))
+                    IEnumerable<string> Neighbors = NeighborSockets.Select(s => s.Name).Where(s => s != this.Config.name);
+                    foreach (Route route in RoutingTable.Where(r => r.Cost < INF && Neighbors.Contains(r.Destination)))
                     {
                         DistributeUpdatedRoute(route);
                     }
@@ -156,7 +157,7 @@ namespace DistanceVectorRouter
                     Route neighbor = RoutingTable.Where(r => r.Next == from.Name && r.Destination == from.Name).FirstOrDefault(); //Get the route to get to the next hop
                     if (neighbor == null)
                     {
-                        Console.WriteLine("Error in UpdateRoutingTable: No neighbor for next hop to: {0}", from.Name);
+                        //Console.WriteLine("Error in UpdateRoutingTable: No neighbor for next hop to: {0}", from.Name);
                         return;
                     }
                     int newCost = costArg + neighbor.Cost;    //newCost is cost to get to the next hop + the update
