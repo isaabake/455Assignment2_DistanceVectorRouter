@@ -58,7 +58,7 @@ namespace DistanceVectorRouter
                             break;
                     }
                 }
-                if (watch.Elapsed.Seconds > 10)
+                if (watch.Elapsed.Seconds > 30)
                 {
                     watch.Reset();
                     IEnumerable<string> Neighbors = NeighborSockets.Select(s => s.Name).Where(s => s != this.Config.name);
