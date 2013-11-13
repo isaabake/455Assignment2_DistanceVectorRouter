@@ -2,6 +2,8 @@ How to run:
 runtest1.bat will open a process for each router in test 1 with correct parameters. The same for test2. If you want to run it against a 
 different test, you will need to generate a new batch file to start the processes.
 
+To kill all processes easily simultaneously, run kill1.bat or kill2.bat
+
 Note: This program requires .NET 4.5 to be installed.
 
 The python script printtables.py works properly and takes as parameters the name of the test directory and optionally which router to print.

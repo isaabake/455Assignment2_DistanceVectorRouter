@@ -4,10 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
-using System.Threading.Tasks;
-using System.Threading;
-using System.Xml.Serialization;
 using System.Diagnostics;
 
 namespace DistanceVectorRouter
@@ -20,7 +16,11 @@ namespace DistanceVectorRouter
         List<Route> RoutingTable = new List<Route>();
         List<Link> NeighborSockets = new List<Link>();
 
-
+        /// <summary>
+        /// A software router that implements distance-vector routing
+        /// </summary>
+        /// <param name="configDir">The directory of the configuration files</param>
+        /// <param name="routerName">The name of this router</param>
         public Router(string configDir, string routerName)
         {
             InitializeConfig(routerName, configDir);
@@ -29,6 +29,9 @@ namespace DistanceVectorRouter
             Console.WriteLine("Router {0}", routerName);
         }
 
+        /// <summary>
+        /// Starts the router listening for incoming messages and broadcasting udpdates every 30 seconds
+        /// </summary>
         public void Run()
         {
             Stopwatch watch = new Stopwatch();
@@ -62,6 +65,7 @@ namespace DistanceVectorRouter
                 {
                     watch.Reset();
                     IEnumerable<string> Neighbors = NeighborSockets.Select(s => s.Name).Where(s => s != this.Config.name);
+                    Console.WriteLine("Periodic update broadcast to neighbors...");
                     foreach (Route route in RoutingTable.Where(r => r.Cost < INF && Neighbors.Contains(r.Destination)))
                     {
                         DistributeUpdatedRoute(route);
@@ -72,6 +76,10 @@ namespace DistanceVectorRouter
             }
         }
 
+        /// <summary>
+        /// Updates the cost of a link between two neighboring routers
+        /// </summary>
+        /// <param name="message">the incoming message in form L destination cost</param>
         private void UpdateLinkCost(string message)
         {
             if (message != null)
@@ -79,35 +87,24 @@ namespace DistanceVectorRouter
                 string[] args = message.Split(' ');
                 if (args.Count() == 3)
                 {
-                    string neighbor = args[1];
-                    int newCost;
-                    if (!int.TryParse(args[2], out newCost))
+                    Link neighbor = NeighborSockets.Where(l => l.Name == args[1]).FirstOrDefault();
+                    if (neighbor == null)
                     {
-                        Console.WriteLine("Error in Link update message: {0}", message);
+                        Console.WriteLine("Error in Link update, no neighbor with name: {0}", args[1]);
                         return;
                     }
 
-                    foreach (Route route in RoutingTable.Where(r => r.Next == neighbor))
-                    {
-                        Route neighborRoute = RoutingTable.Where(r => r.Destination == neighbor).FirstOrDefault();
-                        if (neighborRoute == null)
-                        {
-                            Console.WriteLine("Error in Link update: No neighbor matching {0}", neighbor);
-                            return;
-                        }
-                        Console.WriteLine("Link update");
-                        Console.Write("Old values: ");
-                        PrintRoute(route);
-                        route.Cost = route.Cost - neighborRoute.Cost + newCost;
-                        Console.Write("New values: ");
-                        PrintRoute(route);
-                        DistributeUpdatedRoute(route);   //Send updated routing table to neighbors
-                    }
+                    string update = string.Format("U {0} {1}", neighbor.Name, args[2]);
+                    UpdateRoutingTable(update, neighbor);
                 }
                 
             }
         }
 
+        /// <summary>
+        /// Prints the routing table for the router. if destination is specified, prints only that route
+        /// </summary>
+        /// <param name="message">incoming message in form P destination</param>
         private void PrintRoutingTable(string message)
         {
             if (message != null)
@@ -157,10 +154,31 @@ namespace DistanceVectorRouter
                     Route neighbor = RoutingTable.Where(r => r.Next == from.Name && r.Destination == from.Name).FirstOrDefault(); //Get the route to get to the next hop
                     if (neighbor == null)
                     {
-                        //Console.WriteLine("Error in UpdateRoutingTable: No neighbor for next hop to: {0}", from.Name);
+                        if (from.Name == updateArgs[1])    //Update from neighbor router that's no longer in routing table
+                        {
+                            if (costArg < updateRoute.Cost)    //If the new cost to get to that router is less that what's in the table, change the entry
+                            {
+                                updateRoute.Cost = costArg;
+                                updateRoute.Next = from.Name;
+
+                                //Print out the change
+                                Console.Write("Updated route from {0}: ", from.Name);
+                                PrintRoute(updateRoute);
+                                DistributeUpdatedRoute(updateRoute);
+                            }
+                        }
                         return;
                     }
-                    int newCost = costArg + neighbor.Cost;    //newCost is cost to get to the next hop + the update
+                    int newCost;
+                    if (updateRoute.Destination != neighbor.Destination) //Updating a route with a hop
+                    {
+                        newCost = costArg + neighbor.Cost;    //newCost is cost to get to the next hop + the update
+                    }
+                    else //updating the direct link
+                    {
+                        newCost = costArg;  
+                    }
+                    
 
                     if (updateRoute.Next != from.Name && newCost < updateRoute.Cost)    //If it's not from the current next but has lower cost, update route to use that node instead 
                     {
@@ -184,6 +202,10 @@ namespace DistanceVectorRouter
             }
         }
 
+        /// <summary>
+        /// Distributes the route to neighbors
+        /// </summary>
+        /// <param name="route">The route to send to neighbors</param>
         private void DistributeUpdatedRoute(Route route)
         {
             if (route.Destination != this.Config.name)  //Not route to get to yourself...
@@ -193,15 +215,17 @@ namespace DistanceVectorRouter
                                                                  l.Name != route.Destination &&
                                                                  l.Name != route.Next))  
                 {
-                    Console.WriteLine("Sending update for destination {0} to {1}", route.Destination, link.Name);
+                    //Console.WriteLine("Sending update for destination {0} to {1}", route.Destination, link.Name);
                     byte[] message = System.Text.Encoding.Default.GetBytes(string.Format("U {0} {1}", route.Destination, route.Cost));
-                    Console.WriteLine("!debug! sending \"{0}\" to {1}", Encoding.Default.GetString(message), link.Name);
-                    int sent = link.Socket.Send(message);
-                    Console.WriteLine("Send returned: {0}", sent);
+                    link.Socket.Send(message);
                 }
             }
         }
 
+        /// <summary>
+        /// Loads the routing table from the test directory
+        /// </summary>
+        /// <param name="dir">The test directory</param>
         private void LoadRoutingTable(string dir)
         {
             //Initialize Routing Table for all routers to infinity
@@ -257,6 +281,12 @@ namespace DistanceVectorRouter
 
         }
 
+        /// <summary>
+        /// Initializes the router and configurations for other routers with name, hostname, and port.
+        /// </summary>
+        /// <param name="name">The name of this router</param>
+        /// <param name="dir">The test directory</param>
+        /// <returns></returns>
         private bool InitializeConfig(string name, string dir)
         {
             using (StreamReader RouterFile = new StreamReader(Path.Combine(new string[2] { dir, "routers" })))
@@ -280,12 +310,12 @@ namespace DistanceVectorRouter
         }
 
         /// <summary>
-        /// Opens a UDP socket with specified hostname and port information
+        /// Opens a UDP socket with specified hostname and port information and optionally connects it to a remote
         /// </summary>
         /// <param name="localhostname">local hostname</param>
         /// <param name="localport">local port number</param>
-        /// <param name="remotehostname">remote hostname</param>
-        /// <param name="remoteport">remote port</param>
+        /// <param name="remotehostname">optional remote hostname</param>
+        /// <param name="remoteport">optional remote port</param>
         /// <returns></returns>
         private Socket OpenSocket(string localhostname, int localport, string remotehostname, int remoteport)
         {
